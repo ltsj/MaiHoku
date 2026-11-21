@@ -33,6 +33,7 @@
     <string name="googleone_checkout">前往 Play 结算</string>
     <string name="googleone_confirm_title">请先确认账号和条款</string>
     <string name="googleone_confirm_message">Play 当前结算账号可能与 Google One 界面账号不同。\n\n请在 Play 页面核对实际账号、免费期限、后续收费金额和续费日期。有些优惠即使未完成购买也可能在尝试后消失，是否仍要打开官方结算？</string>
+    <string name="googleone_confirm_message_paid">该优惠没有免费首期，打开结算后会立即按页面价格扣款。\n\nPlay 当前结算账号可能与 Google One 界面账号不同，请在 Play 页面核对实际账号、首期金额、后续续费价格和扣款日期。是否仍要打开官方结算？</string>
     <string name="googleone_cancel">取消</string>
     <string name="googleone_open_checkout">打开官方结算</string>
     <string name="googleone_checkout_failed">打开结算页失败：%1$d %2$s</string>

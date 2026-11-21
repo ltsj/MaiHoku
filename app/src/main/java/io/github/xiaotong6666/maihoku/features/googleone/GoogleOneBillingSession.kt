@@ -19,6 +19,10 @@ import io.github.xiaotong6666.maihoku.MaiHokuLog as Log
 /**
  * One client per foreground Activity. No account switching, payment entry,
  * background purchases, price overrides, or automatic checkout confirmation.
+ *
+ * The query walks the whole SKU list in bounded batches so the offer inspector
+ * covers every Google One / Gemini tier that Play exposes to the account, not
+ * only the first few products of a single oversized request.
  */
 internal class GoogleOneBillingSession(activity: Activity) {
     private val activityRef = WeakReference(activity)
@@ -93,45 +97,82 @@ internal class GoogleOneBillingSession(activity: Activity) {
     }
 
     private fun queryProducts(billing: BillingClient, id: Int) {
-        try {
-            val products = PRODUCT_IDS.map { sku ->
+        val chunks = PRODUCT_IDS.chunked(QUERY_BATCH_SIZE)
+        val collected = ArrayList<AvailableOffer>(PRODUCT_IDS.size * 2)
+        var lastCode = 0
+        var lastMessage = ""
+
+        fun finish() {
+            if (!isCurrent(id)) return
+            val offers = collected.sortedWith(
+                compareByDescending<AvailableOffer> { it.isFreeTrial }
+                    .thenByDescending { OfferPricing.freeMonths(it.phases) }
+                    .thenBy { it.product.productId }
+                    .thenBy { it.details.offerId ?: it.details.basePlanId },
+            )
+            if (offers.isEmpty() && lastCode != 0) {
+                failure(id, R.string.googleone_query_failed, lastCode, lastMessage)
+                return
+            }
+            onActivity(id) { showOffers(it, id, offers) }
+        }
+
+        fun queryChunk(index: Int) {
+            if (!isCurrent(id)) return
+            if (index >= chunks.size) {
+                finish()
+                return
+            }
+            val products = chunks[index].map { sku ->
                 QueryProductDetailsParams.Product.newBuilder()
                     .setProductId(sku)
                     .setProductType(BillingClient.ProductType.SUBS)
                     .build()
             }
             val params = QueryProductDetailsParams.newBuilder().setProductList(products).build()
-            billing.queryProductDetailsAsync(
-                params,
-                ProductDetailsResponseListener { result, details ->
-                    if (!isCurrent(id)) return@ProductDetailsResponseListener
-                    if (result.responseCode != BillingClient.BillingResponseCode.OK) {
-                        failure(id, R.string.googleone_query_failed, result.responseCode, result.debugMessage)
-                        return@ProductDetailsResponseListener
-                    }
-                    val offers = details.orEmpty().flatMap { product ->
-                        product.subscriptionOfferDetails.orEmpty().map { offer ->
-                            val phases = offer.pricingPhases.pricingPhaseList.map { phase ->
-                                OfferPhase(
-                                    amountMicros = phase.priceAmountMicros,
-                                    formattedPrice = phase.formattedPrice,
-                                    billingPeriod = phase.billingPeriod,
-                                    billingCycles = phase.billingCycleCount,
-                                )
+            try {
+                billing.queryProductDetailsAsync(
+                    params,
+                    ProductDetailsResponseListener { result, details ->
+                        if (!isCurrent(id)) return@ProductDetailsResponseListener
+                        if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+                            lastCode = result.responseCode
+                            lastMessage = result.debugMessage
+                            Log.w(
+                                TAG,
+                                "Product batch ${index + 1}/${chunks.size} failed: " +
+                                    "${result.responseCode} ${result.debugMessage}",
+                            )
+                        } else {
+                            collected += details.orEmpty().flatMap { product ->
+                                product.subscriptionOfferDetails.orEmpty().map { offer ->
+                                    AvailableOffer(
+                                        product = product,
+                                        details = offer,
+                                        phases = offer.pricingPhases.pricingPhaseList.map { phase ->
+                                            OfferPhase(
+                                                amountMicros = phase.priceAmountMicros,
+                                                formattedPrice = phase.formattedPrice,
+                                                billingPeriod = phase.billingPeriod,
+                                                billingCycles = phase.billingCycleCount,
+                                            )
+                                        },
+                                    )
+                                }
                             }
-                            AvailableOffer(product, offer, phases)
                         }
-                    }.sortedWith(
-                        compareByDescending<AvailableOffer> { it.isFreeTrial }
-                            .thenByDescending { OfferPricing.freeMonths(it.phases) },
-                    )
-                    onActivity(id) { showOffers(it, id, offers) }
-                },
-            )
-        } catch (error: Throwable) {
-            Log.e(TAG, "Product query failed", error)
-            failure(id, R.string.googleone_query_exception, error.javaClass.simpleName)
+                        queryChunk(index + 1)
+                    },
+                )
+            } catch (error: Throwable) {
+                Log.e(TAG, "Product batch ${index + 1}/${chunks.size} exception", error)
+                lastCode = -1
+                lastMessage = error.javaClass.simpleName
+                queryChunk(index + 1)
+            }
         }
+
+        queryChunk(0)
     }
 
     private fun showOffers(activity: Activity, id: Int, offers: List<AvailableOffer>) {
@@ -167,23 +208,26 @@ internal class GoogleOneBillingSession(activity: Activity) {
             append(describePhases(activity, offer.phases))
             append(text(activity, R.string.googleone_eligibility_notice))
         }
-        val dialog = AlertDialog.Builder(activity)
+        val confirmMessage = if (offer.isFreeTrial) {
+            R.string.googleone_confirm_message
+        } else {
+            R.string.googleone_confirm_message_paid
+        }
+        AlertDialog.Builder(activity)
             .setTitle(text(activity, R.string.googleone_details_title))
             .setMessage(message)
             .setNegativeButton(text(activity, R.string.googleone_back), null)
-        if (offer.isFreeTrial) {
-            dialog.setPositiveButton(text(activity, R.string.googleone_checkout)) { _, _ ->
+            .setPositiveButton(text(activity, R.string.googleone_checkout)) { _, _ ->
                 AlertDialog.Builder(activity)
                     .setTitle(text(activity, R.string.googleone_confirm_title))
-                    .setMessage(text(activity, R.string.googleone_confirm_message))
+                    .setMessage(text(activity, confirmMessage))
                     .setNegativeButton(text(activity, R.string.googleone_cancel), null)
                     .setPositiveButton(text(activity, R.string.googleone_open_checkout)) { _, _ ->
                         launchOfficialBilling(activity, id, offer)
                     }
                     .show()
             }
-        }
-        dialog.show()
+            .show()
     }
 
     private fun launchOfficialBilling(activity: Activity, id: Int, offer: AvailableOffer) {
@@ -270,11 +314,42 @@ internal class GoogleOneBillingSession(activity: Activity) {
 
     private companion object {
         const val TAG = "GoogleOneBilling"
+
+        /** queryProductDetailsAsync has a bounded product list; stay well below it. */
+        const val QUERY_BATCH_SIZE = 20
+
+        /**
+         * Google One / Gemini 订阅 SKU 全集：基础档位 + YouTube 附加项 + 各地区
+         * 首期折扣/试用 SKU。Play 只会返回当前账号实际可见的部分，查询侧不再裁剪。
+         */
         val PRODUCT_IDS = listOf(
+            // 基础档位
             "g1.play.20tb",
             "g1.play.ai.pro",
             "g1.30tb",
             "g1.2tb.ai.subs_variant",
+            "g1.play.2tb.ai",
+            "g1.2tb.subs_variant",
+            "g1.2tb.6months_eft",
+            "g1.play.helium",
+            // 附加项
+            "g1.youtube_premium_individual_add_on",
+            "g1.youtube_premium_family_add_on",
+            "g1.youtube_premium_lite_add_on",
+            // 首期折扣 / 试用
+            "g1.helium.3months_ip_75p.acq",
+            "g1.2tb.3months_ip_85p.acq",
+            "g1.2tb.ai.3months_ip_75p.acq",
+            "g1.10tb.1month_ip_90p",
+            "g1.10tb.3months_ip_85p",
+            "g1.20tb.3months_ip_90p.acq",
+            "g1.20tb.3months_ip_80p.acq",
+            "g1.20tb.3months_ip_75p.acq",
+            "g1.ai.ultra.1month_ip_90p.acq",
+            "g1.ai.ultra.3months_ip_90p.acq",
+            "g1.ai.ultra.3months_ip_80p.acq",
+            "g1.ai.ultra.1month_ip_75p.acq",
+            "g1.ai.ultra.3months_ip_75p.acq",
         )
     }
 }
