@@ -9,6 +9,13 @@
     <string name="googleone_init_failed">初始化失败：%1$s</string>
     <string name="googleone_query_failed">查询失败：%1$d %2$s</string>
     <string name="googleone_query_exception">查询异常：%1$s</string>
+    <string name="googleone_region_tag">【需换区】</string>
+    <string name="googleone_plan_row">%1$s · %2$s</string>
+    <string name="googleone_plan_line">套餐：%1$s\n</string>
+    <string name="googleone_plan_unknown">未收录，按 SKU 显示</string>
+    <string name="googleone_region_note">区域：地区性促销，多数地区账号查不到，需要对应区域（一般美区）的账号\n</string>
+    <string name="googleone_region_normal">区域：常规档位，不限地区\n</string>
+    <string name="googleone_partial_failed">有 %1$d 个 SKU 查询失败，其余结果已列出</string>
     <string name="googleone_offer_free">免费首期</string>
     <string name="googleone_offer_paid">付费</string>
     <string name="googleone_offer_row">%1$s · %2$s · %3$s</string>

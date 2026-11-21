@@ -61,7 +61,9 @@ features/
 在 Xposed 管理器中为 MaiHoku 勾选 Google One（`com.google.android.apps.subscriptions.red`）作为作用域，重启 Google One 后，点击右下角「查询优惠」即可查看当前 Google Play 返回的订阅优惠。
 
 - **查询范围**：覆盖 Google One / Gemini 的 24 个订阅 SKU：基础档位（`g1.play.20tb`、`g1.play.ai.pro`、`g1.30tb`、`g1.2tb.ai.subs_variant`、`g1.play.2tb.ai`、`g1.2tb.subs_variant`、`g1.2tb.6months_eft`、`g1.play.helium`）、YouTube 附加项（个人 / 家庭 / Lite）以及各地区首期折扣 SKU（helium 75p、2TB 85p、Pro 5TB/10TB、Ultra 5x 20TB、Ultra 20x 30TB）。列表按每批 20 个分批查询后合并，避免单次请求被截断。
-- **优惠详情**：列出每个商品返回的 Offer，显示免费首期、计费周期及后续续费价格；优先展示带免费首期的优惠。
+- **展示方式**：列表直接显示套餐档位和价格（如「Ultra 20x 30TB · $19.99 用3个月（后 $199.99/月）」），不再只显示 SKU 和 offerId；地区性促销（`*_ip_*p` 首期价、`g1.play.*` 预装档）前面标「【需换区】」，说明多数地区账号查不到。
+- **查询方式**：24 个 SKU 逐个查询，单个 SKU 失败不会连累其他档位；有查询失败的 SKU 时会提示数量。
+- **优惠详情**：列出每个商品返回的 Offer，显示套餐、区域、免费首期、计费周期及后续续费价格。
 - **订阅方式**：选择优惠后可手动打开 Google Play 官方结算页，免费首期与付费首期优惠都可以拉起结算；不会自动确认购买，也不需要 Frida 或电脑端脚本。
 
 优惠能否使用取决于 Google Play 账号及地区，实际价格和续费条款请以结算页面显示的内容为准。

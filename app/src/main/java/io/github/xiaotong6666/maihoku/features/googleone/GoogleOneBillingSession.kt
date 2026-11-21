@@ -38,19 +38,30 @@ internal class GoogleOneBillingSession(activity: Activity) {
         val phases: List<OfferPhase>,
     ) {
         val isFreeTrial: Boolean get() = OfferPricing.hasFreeFirstPhase(phases)
+
+        val plan: PlanCatalog.Entry? get() = PlanCatalog.find(product.productId, details.offerId)
+
         fun label(activity: Activity): String {
             val tag = ModuleResources.text(
                 activity,
                 if (isFreeTrial) R.string.googleone_offer_free else R.string.googleone_offer_paid,
             )
-            val offerId = details.offerId ?: details.basePlanId
-            return ModuleResources.text(
-                activity,
-                R.string.googleone_offer_row,
-                product.productId,
-                offerId,
-                tag,
-            )
+            val entry = plan
+            if (entry == null) {
+                return ModuleResources.text(
+                    activity,
+                    R.string.googleone_offer_row,
+                    product.productId,
+                    details.offerId ?: details.basePlanId,
+                    tag,
+                )
+            }
+            val title = if (entry.regionLocked) {
+                ModuleResources.text(activity, R.string.googleone_region_tag) + entry.title
+            } else {
+                entry.title
+            }
+            return ModuleResources.text(activity, R.string.googleone_plan_row, title, tag)
         }
     }
 
@@ -97,16 +108,16 @@ internal class GoogleOneBillingSession(activity: Activity) {
     }
 
     private fun queryProducts(billing: BillingClient, id: Int) {
-        val chunks = PRODUCT_IDS.chunked(QUERY_BATCH_SIZE)
         val collected = ArrayList<AvailableOffer>(PRODUCT_IDS.size * 2)
+        val failed = ArrayList<String>(PRODUCT_IDS.size)
         var lastCode = 0
         var lastMessage = ""
 
         fun finish() {
             if (!isCurrent(id)) return
             val offers = collected.sortedWith(
-                compareByDescending<AvailableOffer> { it.isFreeTrial }
-                    .thenByDescending { OfferPricing.freeMonths(it.phases) }
+                compareBy<AvailableOffer> { PlanCatalog.orderOf(it.product.productId, it.details.offerId) }
+                    .thenByDescending { it.isFreeTrial }
                     .thenBy { it.product.productId }
                     .thenBy { it.details.offerId ?: it.details.basePlanId },
             )
@@ -114,21 +125,26 @@ internal class GoogleOneBillingSession(activity: Activity) {
                 failure(id, R.string.googleone_query_failed, lastCode, lastMessage)
                 return
             }
+            if (failed.isNotEmpty()) {
+                Log.w(TAG, "SKU query failed: ${failed.joinToString()}")
+                notice(R.string.googleone_partial_failed, failed.size)
+            }
             onActivity(id) { showOffers(it, id, offers) }
         }
 
-        fun queryChunk(index: Int) {
+        fun querySku(index: Int) {
             if (!isCurrent(id)) return
-            if (index >= chunks.size) {
+            if (index >= PRODUCT_IDS.size) {
                 finish()
                 return
             }
-            val products = chunks[index].map { sku ->
+            val sku = PRODUCT_IDS[index]
+            val products = listOf(
                 QueryProductDetailsParams.Product.newBuilder()
                     .setProductId(sku)
                     .setProductType(BillingClient.ProductType.SUBS)
-                    .build()
-            }
+                    .build(),
+            )
             val params = QueryProductDetailsParams.newBuilder().setProductList(products).build()
             try {
                 billing.queryProductDetailsAsync(
@@ -138,11 +154,8 @@ internal class GoogleOneBillingSession(activity: Activity) {
                         if (result.responseCode != BillingClient.BillingResponseCode.OK) {
                             lastCode = result.responseCode
                             lastMessage = result.debugMessage
-                            Log.w(
-                                TAG,
-                                "Product batch ${index + 1}/${chunks.size} failed: " +
-                                    "${result.responseCode} ${result.debugMessage}",
-                            )
+                            failed += sku
+                            Log.w(TAG, "SKU $sku failed: ${result.responseCode} ${result.debugMessage}")
                         } else {
                             collected += details.orEmpty().flatMap { product ->
                                 product.subscriptionOfferDetails.orEmpty().map { offer ->
@@ -161,18 +174,19 @@ internal class GoogleOneBillingSession(activity: Activity) {
                                 }
                             }
                         }
-                        queryChunk(index + 1)
+                        querySku(index + 1)
                     },
                 )
             } catch (error: Throwable) {
-                Log.e(TAG, "Product batch ${index + 1}/${chunks.size} exception", error)
+                Log.e(TAG, "SKU $sku exception", error)
+                failed += sku
                 lastCode = -1
                 lastMessage = error.javaClass.simpleName
-                queryChunk(index + 1)
+                querySku(index + 1)
             }
         }
 
-        queryChunk(0)
+        querySku(0)
     }
 
     private fun showOffers(activity: Activity, id: Int, offers: List<AvailableOffer>) {
@@ -195,6 +209,22 @@ internal class GoogleOneBillingSession(activity: Activity) {
 
     private fun showOfferDetail(activity: Activity, id: Int, offer: AvailableOffer) {
         val message = buildString {
+            val entry = offer.plan
+            append(
+                text(
+                    activity,
+                    R.string.googleone_plan_line,
+                    entry?.title ?: text(activity, R.string.googleone_plan_unknown),
+                ),
+            )
+            if (entry != null) {
+                append(
+                    text(
+                        activity,
+                        if (entry.regionLocked) R.string.googleone_region_note else R.string.googleone_region_normal,
+                    ),
+                )
+            }
             append(text(activity, R.string.googleone_product_line, offer.product.productId))
             append(
                 text(
@@ -314,9 +344,6 @@ internal class GoogleOneBillingSession(activity: Activity) {
 
     private companion object {
         const val TAG = "GoogleOneBilling"
-
-        /** queryProductDetailsAsync has a bounded product list; stay well below it. */
-        const val QUERY_BATCH_SIZE = 20
 
         /**
          * Google One / Gemini 订阅 SKU 全集：基础档位 + YouTube 附加项 + 各地区
